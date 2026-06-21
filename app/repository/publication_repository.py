@@ -9,4 +9,4 @@ def list_publications(session: Session):
     rows = session.execute(stmt).scalars().all()
     total = session.execute(select(func.count())).scalar_one()
 
-    return total, rows가
+    return total, rows
