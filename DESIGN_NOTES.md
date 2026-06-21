@@ -111,7 +111,7 @@ alembic/           스키마 마이그레이션 이력
 - [x] 2: 시점/버전 관리 (구현)
 - [x] 3: 검색/조회 성능과 확장 (설계)
 - [x] 4: 데이터 품질/이상치 탐지 (설계)
-- [ ] 자유제안: 단가 변동 이력/추이 조회 API
+- [x] 자유제안: 단가 변동 이력/추이 조회 API (구현)
 
 ### 보너스 1. 외부 단가 수집 파이프라인 (설계)
 
@@ -351,6 +351,74 @@ etl_run                             data_quality_issue
 
 - 품질 기준이 항목 유형별로 달라져야 하면(예: 토목은 ±30%, 전기는 ±70%) `issue_type`별 임계치 테이블을 별도로 관리해야 합니다.
 - 이상 감지 결과를 단순 조회가 아니라 "승인/반려" 워크플로우로 처리해야 하면 `data_quality_issue`에 `status`, `reviewer`, `resolved_at` 컬럼이 추가되는 형태로 확장합니다.
+
+---
+
+### 자유 제안. 단가 변동 이력/추이 조회 API (구현)
+
+#### 제안 배경
+
+기존 `GET /quantity-item/{item_code}` API는 "현재(또는 특정 시점) 단가 하나"만 반환합니다. 실무에서 예산 책정 시 단가 상승 추이를 반영하거나, 이상하게 급등한 시점을 파악하는 용도로 활용할 수 있겠다 싶어 "이 항목의 단가가 어떻게 바뀌어 왔는가"를 시계열로 볼 수 있게 하자는 목표입니다.
+
+#### 엔드포인트
+
+```
+GET /quantity-item/{item_code}/price-history
+```
+
+#### 핵심 설계 판단
+
+**새 테이블 없음**: `std_market_price`가 이미 append-only 이력 테이블이라 추가 비용 없이 구현 가능합니다. 기존 적재 구조가 이 기능을 공짜로 제공합니다. <br>
+**총단가**: `total_cost = material_cost + labor_cost + expense_cost`를 Python에서 합산해 제공합니다. DB에 컬럼으로 두지 않는 이유는 파생값이기 때문으로, 원본이 바뀌면 자동으로 반영됩니다.
+
+#### 이 설계가 깨지는 시점
+
+- 변동률 계산 방식이 항목 유형별로 달라져야 하거나, 총단가 계산에 가중치가 붙으면 Python 계산 로직을 서비스 레이어에서 분리해야 합니다.
+- 공시가 잦아져 이력 건수가 매우 많아지면 페이지네이션 추가를 검토해야 합니다.
+
+#### 동작 검증
+
+제공된 `std_market_price.jsonl`은 `2026-05-27` 단일 공시 스냅샷이라 모든 항목의 이력이 1건입니다. 변동률 계산을 검증하려면 동일 항목의 이전 시점 단가를 직접 삽입해 2건짜리 이력을 만들면 됩니다.
+
+```bash
+# 1. has_price=true인 항목 조회해서 item_code 확인
+curl "http://localhost:8080/quantity-item?has_price=true&page=1&size=5"
+
+# 2. 해당 item_code로 이전 시점 단가 삽입 (AAA162303500 기준)
+podman exec jeoksan_db_1 psql -U jeoksan -d jeoksan -c "
+INSERT INTO std_market_price (item_code, material_cost, labor_cost, expense_cost, published_date)
+VALUES ('AAA162303500', 0, 0, 22000, '2025-12-01')
+ON CONFLICT DO NOTHING;
+"
+
+# 3. price-history 조회
+curl "http://localhost:8080/quantity-item/AAA162303500/price-history"
+```
+
+**검증 결과**
+
+```json
+{
+  "history": [
+    {
+      "published_date": "2025-12-01",
+      "expense_cost": 22000,
+      "total_cost": 22000,
+      "change_rate": { "expense_cost": null, "total_cost": null }
+    },
+    {
+      "published_date": "2026-05-27",
+      "expense_cost": 25694,
+      "total_cost": 25694,
+      "change_rate": { "expense_cost": 0.1679, "total_cost": 0.1679 }
+    }
+  ]
+}
+```
+
+- 첫 시점은 비교 대상이 없으므로 `change_rate` 전부 `null`
+- `material_cost`, `labor_cost`는 이전 값이 `0`이라 분모가 0 → `null` 반환 (0 나누기 방지)
+- `expense_cost`: `(25694 - 22000) / 22000 = 0.1679` → **이전 대비 +16.79% 상승** 확인
 
 ---
 

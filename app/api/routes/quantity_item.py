@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.core.db import get_db
 from app.core.response import error, success
-from app.services import quantity_item_service
+from app.services import quantity_item_service, price_history_service
 
 router = APIRouter()
 
@@ -28,6 +28,18 @@ def search_quantity_item(
 ):
     level_codes = [level1_code, level2_code, level3_code, level4_code, level5_code]
     result = quantity_item_service.search(db, work_type_code, level_codes, keyword, has_price, page, size, as_of)
+
+    return success(result.model_dump(mode="json"))
+
+
+@router.get("/quantity-item/{item_code}/price-history")
+def get_price_history(
+        item_code: str,
+        db: Session = Depends(get_db),
+):
+    result = price_history_service.get_price_history(db, item_code)
+    if result is None:
+        return error(f"item_code '{item_code}' not found")
 
     return success(result.model_dump(mode="json"))
 
