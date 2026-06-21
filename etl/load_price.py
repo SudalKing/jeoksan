@@ -5,6 +5,7 @@ from typing import Optional
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
+from app.models import Publication
 from app.models.price import StdMarketPrice
 from etl.extract import iter_jsonl
 from etl.normalize import normalize_unit
@@ -33,9 +34,23 @@ def load_price(
 ) -> dict:
     inserted = 0
     skipped = 0
+
     for row in iter_jsonl(path):
         code = (row.get("qtyCalcCtyclcd") or "").strip() or None
         raw_unit = row.get("unit")
+        published_date = _parse_date(row.get("pblctDate"))
+
+        if published_date is None:
+            skipped += 1
+            continue
+
+        pub_stmt = insert(Publication).values(
+            published_date=published_date,
+            description=row.get("uprcAplCndtnCntnts")
+        ).on_conflict_do_nothing(index_elements=["published_date"])
+
+        session.execute(pub_stmt)
+
         values = {
             "item_code": code,
             "work_type_code": row.get("cnstwkDivCd"),
@@ -47,19 +62,19 @@ def load_price(
             "material_cost": _parse_number(row.get("mtrlcstUprc")),
             "labor_cost": _parse_number(row.get("lbrcstUprc")),
             "expense_cost": _parse_number(row.get("gnrexpnsUprc")),
-            "published_date": _parse_date(row.get("pblctDate")),
+            "published_date": published_date,
             "price_condition_note": row.get("uprcAplCndtnCntnts"),
         }
-        if values["published_date"] is None:
-            skipped += 1
-            continue
+
         stmt = insert(StdMarketPrice).values(**values)
         update_cols = {k: v for k, v in values.items() if k not in ("item_code", "published_date")}
         stmt = stmt.on_conflict_do_update(
             index_elements=["item_code", "published_date"], set_=update_cols
         )
+
         session.execute(stmt)
         inserted += 1
+
     session.commit()
 
     return {"inserted": inserted, "skipped": skipped}
