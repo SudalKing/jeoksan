@@ -20,7 +20,7 @@ setup:
 	$(COMPOSE) up -d db
 	$(COMPOSE) run --rm app alembic upgrade head
 	$(COMPOSE) run --rm -v $(PWD)/data:/srv/data app python -m etl.run
-	$(COMPOSE) down
+	$(COMPOSE) stop db && $(COMPOSE) rm -f db 2>/dev/null || true
 
 # 앱 실행: 서버 기동 (완료 후 http://localhost:8080 에서 API 응답)
 run:
