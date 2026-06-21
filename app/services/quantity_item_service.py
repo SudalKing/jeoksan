@@ -43,14 +43,20 @@ def search(
     has_price: Optional[bool],
     page: int,
     size: int,
+    as_of=None
 ) -> QuantityItemListResponse:
-    total, rows = search_quantity_item(db, work_type_code, level_codes, keyword, has_price, page, size)
+    total, rows = search_quantity_item(db, work_type_code, level_codes, keyword, has_price, page, size, as_of)
     items = [_to_schema(*row) for row in rows]
     return QuantityItemListResponse(total=total, page=page, size=size, items=items)
 
 
-def get_one(db: Session, item_code: str) -> Optional[QuantityItemSchema]:
-    row = get_quantity_item(db, item_code)
+def get_one(
+        db: Session,
+        item_code: str,
+        as_of=None
+) -> Optional[QuantityItemSchema]:
+    row = get_quantity_item(db, item_code, as_of)
     if row is None:
         return None
+
     return _to_schema(*row)

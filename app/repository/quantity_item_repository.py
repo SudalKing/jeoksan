@@ -1,3 +1,4 @@
+from datetime import date
 from typing import Optional
 
 from sqlalchemy import func, select
@@ -7,20 +8,29 @@ from app.models.classification import Classification
 from app.models.price import StdMarketPrice
 
 
-def _latest_price_subquery():
-    return (
+def _latest_price_subquery(as_of: Optional[date] = None):
+    stmt = (
         select(
             StdMarketPrice.item_code.label("item_code"),
             func.max(StdMarketPrice.published_date).label("max_published_date"),
         )
         .where(StdMarketPrice.item_code.is_not(None))
-        .group_by(StdMarketPrice.item_code)
-        .subquery()
     )
 
+    if as_of:
+        stmt = stmt.where(StdMarketPrice.published_date <= as_of)
 
-def _base_query(work_type_code, level_codes, keyword, has_price):
-    latest = _latest_price_subquery()
+    return stmt.group_by(StdMarketPrice.item_code).subquery()
+
+
+def _base_query(
+        work_type_code,
+        level_codes,
+        keyword,
+        has_price,
+        as_of=None
+):
+    latest = _latest_price_subquery(as_of)
     latest_price = (
         select(StdMarketPrice)
         .join(
@@ -61,8 +71,9 @@ def search_quantity_item(
     has_price: Optional[bool],
     page: int,
     size: int,
+    as_of: Optional[date] = None,
 ):
-    stmt, _ = _base_query(work_type_code, level_codes, keyword, has_price)
+    stmt, _ = _base_query(work_type_code, level_codes, keyword, has_price, as_of)
 
     count_stmt = select(func.count()).select_from(stmt.subquery())
     total = db.execute(count_stmt).scalar_one()
@@ -73,8 +84,12 @@ def search_quantity_item(
     return total, rows
 
 
-def get_quantity_item(db: Session, item_code: str):
-    stmt, _ = _base_query(None, [], None, None)
+def get_quantity_item(
+        db: Session,
+        item_code: str,
+        as_of: Optional[date] = None,
+):
+    stmt, _ = _base_query(None, [], None, None, as_of)
     stmt = stmt.where(Classification.item_code == item_code)
 
     return db.execute(stmt).first()
