@@ -1,11 +1,12 @@
 from fastapi import FastAPI
 
-from app.api.routes import classification, quantity_item
+from app.api.routes import classification, quantity_item, publication
 
 app = FastAPI(title="공종 단가 조회 시스템")
 
 app.include_router(classification.router)
 app.include_router(quantity_item.router)
+app.include_router(publication.router)
 
 
 @app.get("/health")
