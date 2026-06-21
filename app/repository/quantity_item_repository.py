@@ -32,7 +32,14 @@ def _base_query(
 ):
     latest = _latest_price_subquery(as_of)
     latest_price = (
-        select(StdMarketPrice)
+        select(
+            StdMarketPrice.id,
+            StdMarketPrice.item_code,
+            StdMarketPrice.material_cost,
+            StdMarketPrice.labor_cost,
+            StdMarketPrice.expense_cost,
+            StdMarketPrice.published_date,
+        )
         .join(
             latest,
             (StdMarketPrice.item_code == latest.c.item_code)
