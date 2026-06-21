@@ -109,14 +109,15 @@ alembic/           스키마 마이그레이션 이력
 
 - [x] 1: 외부 단가 수집 파이프라인 (설계)
 - [x] 2: 시점/버전 관리 (구현)
-- [ ] 4: 데이터 품질/이상치 탐지
+- [x] 3: 검색/조회 성능과 확장 (설계)
+- [x] 4: 데이터 품질/이상치 탐지 (설계)
 - [ ] 자유제안: 단가 변동 이력/추이 조회 API
 
 ### 보너스 1. 외부 단가 수집 파이프라인 (설계)
 
 #### 배경 및 목표
 
-현재 ETL은 GCS에 올려둔 스냅샷 파일을 1회성으로 적재하는 방식입니다.
+현재 ETL은 GCS에 올려둔 스냅샷 파일을 1회성으로 적재하는 방식입니다. <br>
 조달청 나라장터 OpenAPI(https://www.data.go.kr/data/15129415/openapi.do)를 주기적으로 호출해 새로운 공시 단가를 자동으로 수집·적재하는 파이프라인을 설계합니다.
 
 #### 관련 외부 API 엔드포인트
@@ -182,6 +183,176 @@ alembic/           스키마 마이그레이션 이력
 - 조달청이 API 스펙(파라미터명, 응답 구조)을 변경하면 `fetch_price.py`의 파싱 로직 수정 필요
 - 공시 주기가 월 단위처럼 잦아지면 배치 주기 조정 필요
 - 단가 외 다른 데이터(자재 관련 등)를 추가 수집해야 할 경우, 엔드포인트별 파서를 별도로 만들어야 하므로 `fetch_price.py`의 책임을 분리하여 소스별 fetcher 클래스로 분리 검토 필요
+
+### 보너스 2. 시점/버전 관리 (구현)
+
+#### 배경
+
+표준시장단가는 매 공시마다 새 값이 발표됩니다. "지금 단가"뿐 아니라 "특정 시점의 단가"를 조회할 수 있어야 하며, 새 공시가 들어와도 과거 이력이 사라지면 안 됩니다.
+
+#### 핵심 결정 1 — Append-Only 적재
+
+`std_market_price`는 `UPDATE` 없이 공시마다 새 행을 쌓는 Append-Only 테이블로 설계했습니다.
+
+**판단 근거**: 단가 데이터는 회계·견적 근거로 사용됩니다. 이전 시점의 단가를 덮어쓰면 "그 시점에 얼마였는가"를 소급해서 답할 수 없습니다. `unique(item_code, published_date)` 제약으로 같은 시점·같은 항목의 중복 행만 차단하고, ETL 재실행 시에는 upsert로 멱등성을 보장합니다.
+
+**이 설계가 깨지는 시점**: 단가 수정 공고가 발생할 경우(예: 오류 정정) — 현재 설계에서는 동일 `published_date`의 행을 upsert로 덮어쓰므로 정정 데이터 재적재는 가능하나, "정정 전 원본"을 별도로 보존하려면 버전 컬럼이나 별도 이력 테이블이 필요합니다.
+
+#### 핵심 결정 2 — `publication` 테이블을 독립 엔티티로
+
+공시 날짜를 `std_market_price`의 컬럼으로만 두지 않고 `publication` 테이블로 독립시켰습니다.
+
+```
+publication
+├ published_date (PK)
+├ description (공시 조건 설명)
+└ created_at
+```
+
+**판단 근거**: `publication_date` 컬럼만 있으면 "어떤 공시가 존재하는가"를 알려면 `std_market_price`를 GROUP BY해야 합니다. `publication`을 독립 엔티티로 두면 공시 목록 조회(`GET /publication`)가 단순 SELECT가 되고, 향후 공시별 다양한 메타데이터를 붙일 수 있는 확장점이 됩니다.
+
+ETL에서 단가를 적재하기 전에 `publication`을 먼저 upsert해 공시 엔티티를 선행 보장합니다.
+
+#### 핵심 결정 3 — `as_of` 파라미터와 쿼리 설계
+
+`GET /quantity-item?as_of=2024-06-30` 형태로 특정 시점의 단가를 조회합니다.
+
+쿼리는 중첩 서브쿼리 2단계로 구성했습니다.
+
+```sql
+-- 1단계: as_of 이하의 최신 공시일 per item_code
+WITH latest AS (
+    SELECT item_code, MAX(published_date) AS max_date
+    FROM std_market_price
+    WHERE published_date <= :as_of        -- as_of 없으면 조건 제거
+    GROUP BY item_code
+)
+-- 2단계: 그 시점의 실제 단가 행
+, latest_price AS (
+    SELECT p.*
+    FROM std_market_price p
+    JOIN latest ON p.item_code = latest.item_code
+               AND p.published_date = latest.max_date
+)
+-- 3단계: classification과 LEFT JOIN
+SELECT c.*, lp.material_cost, lp.labor_cost, lp.expense_cost, lp.published_date
+FROM classification c
+LEFT JOIN latest_price lp ON c.item_code = lp.item_code
+```
+
+`as_of` 없이 호출하면 1단계 WHERE 조건이 제거되어 "현재 시점 최신 단가"를 반환합니다. 동일한 쿼리 구조로 두 케이스를 모두 처리합니다.
+
+---
+
+### 보너스 3. 검색/조회 성능과 확장 (설계)
+
+#### 배경 및 가정 시나리오
+
+> 산출항목 10만 건, DAU 1,000명, 피크 100 req/s, p99 응답시간 목표 200ms
+
+현재 시스템은 소규모 적재 데이터에 단순 LIKE 검색으로 동작합니다. 데이터·트래픽이 커지면 병목이 되는 지점을 단계별로 짚고, 각 단계에서 취할 수 있는 가장 비용 효율적인 대응을 설계합니다.
+
+#### 현재 인덱스 전략과 한계
+
+| 인덱스 | 위치 | 효과 |
+|---|---|---|
+| 복합 인덱스 `(work_type_code, level1_code, …, level5_code)` | classification | 분류 계층 필터 쿼리에서 인덱스 스캔 |
+| 단일 인덱스 `(item_name)` | classification | 정확 일치 조회에는 유효, `LIKE '%keyword%'`는 무효 |
+| 유니크 인덱스 `(item_code, published_date)` | std_market_price | 단가 조회·upsert 키 |
+
+핵심 병목: `LIKE '%keyword%'` 쿼리는 앞에 `%`가 붙으면 B-tree 인덱스를 타지 못해 전체 행 순차 스캔으로 처리됩니다. 데이터가 10만 건을 넘기 시작하면 응답 시간이 선형으로 증가할 것으로 예상됩니다.
+
+#### 단계별 확장 전략
+
+**1단계 — PostgreSQL 내에서 해결 (데이터 10만 건, req/s 100 이하)**
+
+- `pg_trgm` 익스텐션을 활성화하고 `item_name`에 GIN 트라이그램 인덱스를 추가합니다.
+
+```sql
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE INDEX ix_classification_item_name_trgm
+    ON classification USING GIN (item_name gin_trgm_ops);
+```
+
+트라이그램 인덱스는 `LIKE '%keyword%'` 패턴도 인덱스를 활용할 수 있어, 추가 인프라 없이 검색 성능을 개선할 수 있습니다.
+
+**2단계 — 읽기 캐시 도입 (req/s 300 이상)**
+
+분류 계층 트리와 최신 단가처럼 자주 조회되지만 변경이 드문 데이터는 Redis/ValKey 등에 캐싱합니다.
+
+| 캐시 대상 | TTL | 무효화 트리거 |
+|---|---|---|
+| 분류 전체 트리 | 1시간 | ETL 완료 후 캐시 삭제 이벤트 |
+| 최신 단가 목록 | 30분 | 새 공시 적재 후 해당 item_code 캐시 삭제 |
+
+
+캐시 전략은 Write-Around(ETL이 직접 캐시에 쓰지 않고, 다음 조회 시 채워지는 방식)로 운영합니다. ETL 완료 후 `CACHE_INVALIDATE` 이벤트로 관련 키를 삭제하고, 첫 조회가 들어올 때 DB를 읽어 캐시에 채우는 Lazy Loading 방식입니다.
+
+**3단계 — 검색 전용 엔진 분리 (키워드 검색 req/s 500 이상 또는 복합 검색어 지원 필요 시)**
+
+PostgreSQL LIKE로 커버하기 어려운 요구사항이 생기면 ElasticSearch/OpenSearch로 검색 레이어를 분리합니다.
+
+- 분류명, 품명, 규격을 복합 필드로 색인하면 오타 허용 검색(fuzzy), 형태소 분석 기반 검색이 가능해집니다.
+- ETL 완료 시점에 ES에도 문서를 색인하는 방식을 사용합니다.
+- 단, ES 도입은 운영 복잡도(스키마 마이그레이션, 인덱스 재구축, 데이터 동기화, 모니터링 등)가 크게 올라가므로, 1·2단계로 해결이 안 될 때 선택합니다.
+
+**4단계 — DB Read Replica (DB CPU가 병목)**
+
+단가 이력 조회나 집계 쿼리처럼 무거운 읽기 요청이 늘면 Read Replica를 추가합니다. 쓰기(ETL)는 Primary, API 읽기는 Replica로 라우팅합니다. SQLAlchemy의 `Engine` 레벨에서 라우팅 전략을 주입하면 서비스 코드 변경 없이 대응할 수 있습니다.
+
+#### 이 설계가 깨지는 시점
+
+- 검색 요구사항이 "같은 의미의 유사어 검색"(예: "포장" → "아스팔트 덧씌우기")처럼 시맨틱 검색 수준으로 올라가면 트라이그램 인덱스로 커버할 수 없어 벡터 검색(임베딩 + pgvector 또는 ES KNN) 레이어가 필요합니다.
+- 단가 이력 데이터가 수천만 건을 넘어서면 `std_market_price` 테이블을 `published_date` 기준으로 일별/월별/연별 파티셔닝을 검토해야 합니다.
+
+---
+
+### 보너스 4. 데이터 품질/이상치 탐지 (설계)
+
+#### 배경
+
+현재 ETL은 데이터를 적재할 때 파싱 불가 행만 `skipped` 카운트를 기록하고 나머지는 모두 그대로 넣습니다. 원천 데이터의 품질 문제를 가시화하고 운영 중 이상 징후를 포착하기 위한 체계가 없는 상태입니다.
+
+#### 탐지할 이슈 유형
+
+| issue_type | 탐지 기준 | 임계치/기준값 |
+|---|---|---|
+| `missing_item_code` | classification 행의 `qtyCalcCtyclcd`가 공백·NULL | 해당 행 적재 제외 |
+| `orphan_price` | `std_market_price.item_code`가 `classification`에 없는 경우 | 전체 적재 후 SQL 집합 연산 |
+| `unmapped_unit` | `raw_unit` 값이 `unit_alias` 테이블에 없는 경우 | 전체 적재 후 SQL 집합 연산 |
+| `price_outlier` | 전 공시 시점 대비 단가 변동률이 임계치 초과 | ±50% (운영하며 조정) |
+
+> **임계치 근거**: 표준시장단가는 반기별 공시로, 물가 상승률·인건비 변동을 감안해도 반기 50% 초과는 통상적으로 데이터 오류이거나 품목 자체의 대체/삭제를 의미할 가능성이 높다고 판단했습니다. 운영해보며 데이터 축적 후 히스토그램을 보고 조정할 수 있습니다.
+
+#### 스키마 설계
+
+```
+etl_run                             data_quality_issue
+├ id (PK)                     ←──   ├ id (PK)
+├ source (varchar)                  ├ etl_run_id (FK)
+├ status (running/success/failed)   ├ issue_type (varchar)
+├ inserted_count                    ├ target_code (item_code 또는 raw_unit 등)
+├ skipped_count                     ├ detail (text — 상세 내용)
+├ started_at                        └ detected_at
+└ finished_at
+```
+
+`etl_run`은 ETL 실행 단위를 추적합니다. 어떤 실행에서 어떤 이슈가 발생했는지를 연결할 수 있어, "이번 배치에서 새로 발생한 이슈"와 "이전부터 있던 이슈"를 구분할 수 있습니다.
+
+#### 처리 방침
+
+탐지된 이상 데이터를 **적재 차단하지 않고 기록 후 허용** 합니다.
+
+- **이유**: 원천 데이터가 공공 OpenAPI이기 때문에 우리에게 수정 권한이 없습니다. 차단하면 데이터 손실이 발생하고, 이상 데이터도 이력 관점에서 보존 가치가 있을 수 있습니다.
+- 대신 API를 통해 운영자가 현황을 조회하고 판단할 수 있도록 합니다.
+- 심각도가 높은 이슈에 대해서는 향후 Slack 알림 등 외부 알림 채널을 연결하는 확장을 고려할 수 있습니다.
+
+#### 이 설계가 깨지는 시점
+
+- 품질 기준이 항목 유형별로 달라져야 하면(예: 토목은 ±30%, 전기는 ±70%) `issue_type`별 임계치 테이블을 별도로 관리해야 합니다.
+- 이상 감지 결과를 단순 조회가 아니라 "승인/반려" 워크플로우로 처리해야 하면 `data_quality_issue`에 `status`, `reviewer`, `resolved_at` 컬럼이 추가되는 형태로 확장합니다.
+
+---
 
 ## 8. AI 활용
 
