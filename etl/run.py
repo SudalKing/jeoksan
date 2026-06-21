@@ -18,6 +18,10 @@ def main() -> None:
         price_result = load_price(session, DATA_DIR / "std_market_price.jsonl", alias_map)
         print(f"classification: {classification_result}")
         print(f"std_market_price: {price_result}")
+    except Exception as e:
+        session.rollback()
+        print(f"ETL failed: {e}")
+        raise
     finally:
         session.close()
 
