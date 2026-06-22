@@ -85,13 +85,13 @@ classification                              std_market_price (append-only)
 ├ spec, raw_unit, canonical_unit            ├ raw_unit, canonical_unit
 ├ created_at, updated_at                    ├ material_cost / labor_cost / expense_cost
                                             ├ published_date, price_condition_note
-                                            ├ created_at
+                                            ├ created_at, updated_at
                                             └ unique(item_code, published_date)
 
-unit_alias
-├ raw_unit (PK)
-├ canonical_unit
-└ created_at
+unit_alias                                  publication
+├ raw_unit (PK)                             ├ published_date (PK)
+├ canonical_unit                            ├ description
+├ created_at, updated_at                    └ created_at, updated_at
 ```
 
 **0) `updated_at` 컬럼**
