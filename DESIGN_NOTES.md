@@ -92,6 +92,10 @@ unit_alias
 └ created_at
 ```
 
+**0) `updated_at` 컬럼**
+
+처음 설계할 때 `std_market_price`는 append-only 이력 테이블이라 행이 갱신되지 않으므로 `updated_at`이 의미 없다고 판단해 제외했습니다. `publication`과 `unit_alias`도 같은 이유로 제외했었습니다. 그러나 사내 레거시 관행이 "모든 테이블에 생성/수정 시각 컬럼을 두도록 합니다"로 명시되어 있어 일관성을 위해 추가했습니다. append-only 테이블의 `updated_at`은 실질적으로 `created_at`과 같은 값을 가지게 되지만, 관행을 따르는 것이 운영 툴이나 다른 시스템과의 통합에서 예외를 만들지 않는다는 판단입니다.
+
 **1) `item_code` FK 제약 미적용**
 **판단 근거**
 - 원본 데이터에 `classification`에 없는 `item_code`를 가진 단가 행이 실재합니다. FK 제약을 걸면 해당 행이 적재 자체가 안 되어 데이터 손실이 발생합니다.

@@ -12,3 +12,6 @@ class UnitAlias(Base):
     raw_unit: Mapped[str] = mapped_column(String, primary_key=True)
     canonical_unit: Mapped[str] = mapped_column(String, nullable=False)
     created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[object] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )

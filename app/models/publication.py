@@ -12,3 +12,6 @@ class Publication(Base):
     published_date: Mapped[object] = mapped_column(Date, primary_key=True)
     description: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[object] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )

@@ -28,6 +28,9 @@ class StdMarketPrice(Base):
     price_condition_note: Mapped[Optional[str]] = mapped_column(Text)
 
     created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[object] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
     __table_args__ = (
         UniqueConstraint("item_code", "published_date", name="uq_price_item_published_date"),
