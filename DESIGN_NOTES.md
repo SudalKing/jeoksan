@@ -15,7 +15,7 @@
 
 - **필수 기능(ETL + 조회/검색 API + 코드 구조) 및 보너스(일부 구현)·자유제안까지 구현 완료**된 상태입니다.
 - 보너스는 `외부 단가 수집(1, 설계)`, `시점/버전 관리(2, 구현)`, `검색/조회 성능과 확장(3, 설계)`, `데이터 품질/이상치 탐지(4, 설계)`를 진행했고, 자유제안으로 `단가 변동 이력/추이 조회 API(구현)`를 추가했습니다.
-- 기술스택: Python 3.9, FastAPI, SQLAlchemy 2.0, PostgreSQL, Alembic, Docker
+- 기술스택: Python 3.9, FastAPI, SQLAlchemy, PostgreSQL, Alembic, Docker
 - DB부터 애플리케이션까지 모두 컨테이너화했습니다.
 - **실행 전 Docker Desktop(또는 Docker daemon)이 실행 중이어야 합니다.** 실행 순서: `make setup → make run`, 종료 및 정리: `make down`
 - OpenAPI 명세는 `openapi.json`(루트 디렉토리)에 포함되어 있으며, 서버 기동 후 `http://localhost:8080/docs` 에서도 확인 가능합니다.
