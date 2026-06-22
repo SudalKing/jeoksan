@@ -38,6 +38,6 @@ run:
 down:
 	$(COMPOSE) down -v --rmi local
 
-# 단위 테스트 실행
+# 단위 테스트 실행 (로컬 venv 필요: pip install -r requirements.txt)
 test:
 	.venv/bin/pytest tests/ -v
