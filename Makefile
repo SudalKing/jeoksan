@@ -2,15 +2,17 @@
 #
 # make setup  →  make run  →  make down
 
-COMPOSE = python3 -m podman_compose -f podman-compose.yml
+COMPOSE = docker compose -f docker-compose.yml
 
 .PHONY: setup run down
 
 # 환경 구성: podman 머신 기동, 의존성 설치, 데이터 다운로드, 이미지 빌드, DB 마이그레이션/ETL
 setup:
-	python3 -m pip install --quiet podman-compose
-	-podman machine init 2>/dev/null
-	podman machine start 2>/dev/null || true
+	@docker info >/dev/null 2>&1 || { \
+  		echo "Docker daemon이 실행되고 있지 않습니다."; \
+  		echo "Docker desktop을 실행한 뒤 다시 시도해주세요."; \
+  		exit 1; \
+  	}
 	mkdir -p data
 	test -f data/construction_classification.jsonl || curl -sf -o data/construction_classification.jsonl \
 		https://storage.googleapis.com/timwork-hiring-data/construction-price/construction_classification.jsonl
@@ -24,6 +26,11 @@ setup:
 
 # 앱 실행: 서버 기동 (완료 후 http://localhost:8080 에서 API 응답)
 run:
+	@docker info >/dev/null 2>&1 || { \
+  		echo "Docker daemon이 실행되고 있지 않습니다."; \
+  		echo "Docker desktop을 실행한 뒤 다시 시도해주세요."; \
+  		exit 1; \
+  	}
 	$(COMPOSE) up -d
 
 # 리소스 정리: 컨테이너·볼륨·임시 파일 등 실행에 사용한 모든 리소스 정리
