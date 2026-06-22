@@ -33,6 +33,7 @@ run:
   	}
 	$(COMPOSE) up -d
 
-# 리소스 정리: 컨테이너·볼륨·임시 파일 등 실행에 사용한 모든 리소스 정리
+# 리소스 정리: 컨테이너·볼륨·로컬 빌드 이미지 등 실행에 사용한 모든 리소스 정리
+# docker pull한 이미지는 일부러 지우지 않도록 했습니다.
 down:
-	$(COMPOSE) down -v
+	$(COMPOSE) down -v --rmi local
