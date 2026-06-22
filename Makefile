@@ -4,7 +4,7 @@
 
 COMPOSE = docker compose -f docker-compose.yml
 
-.PHONY: setup run down
+.PHONY: setup run down test
 
 # 환경 구성: podman 머신 기동, 의존성 설치, 데이터 다운로드, 이미지 빌드, DB 마이그레이션/ETL
 setup:
@@ -37,3 +37,7 @@ run:
 # docker pull한 이미지는 일부러 지우지 않도록 했습니다.
 down:
 	$(COMPOSE) down -v --rmi local
+
+# 단위 테스트 실행
+test:
+	.venv/bin/pytest tests/ -v
